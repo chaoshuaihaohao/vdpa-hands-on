@@ -1,0 +1,34 @@
+build_dir: /home/vdpa
+base_image_name: CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+base_image_file: "{{ build_dir }}/qcow2/{{ base_image_name }}"
+remote_base_file: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+
+#l1 src
+guest_l1_src_name: dpdk-vdpa-src
+guest_l1_src_mac: 02:ca:fe:fa:ce:01
+guest_l1_src_root_password: 1 # Change this password to your own
+guest_l1_src_ip: 192.168.122.56    # Default management IP address
+guest_l1_src_image_file: "{{ build_dir }}/qcow2/{{ guest_l1_src_name }}.qcow2"
+
+#l1 dst
+guest_l1_dst_name: dpdk-vdpa-dst
+guest_l1_dst_mac: 02:ca:fe:fa:ce:02
+guest_l1_dst_root_password: 1 # Change this password to your own
+guest_l1_dst_ip: 192.168.122.72    # Default management IP address
+guest_l1_dst_image_file: "{{ build_dir }}/qcow2/{{ guest_l1_dst_name }}.qcow2"
+
+#l2
+guest_l2_name: dpdk-vdpa
+guest_l2_root_password: 1 # Change this password to your own
+guest_l2_image_file: "{{ build_dir }}/qcow2/{{ guest_l2_name }}.qcow2"
+
+# dpdk-vdpa interfaces
+dpdk_vdpa_ifaces:
+  - mac: 56:48:4f:53:54:01
+    pci_addr:
+      domain: '0000'
+      bus: '00'
+      slot: '01'
+      function: '0'
+    rx_queue_size: 256
+    path: /tmp/vdpa-socket0

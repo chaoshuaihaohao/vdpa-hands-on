@@ -1,0 +1,442 @@
+# Playbook to set up a basic vdpa-net host on Fedora30
+#
+#
+- hosts: kvm_host  
+  remote_user: chenhao  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+
+# In order to run libvirt commands, we need to add the user to the
+# libvirt group
+    - name: Add user to libvirt group 
+      user:
+        groups:
+          - libvirt
+        name: "{{ ansible_facts['user_id'] }}"
+        append: yes
+      become: yes
+
+    - name: Restart libvirtd
+      service:
+        name: libvirtd
+        state: restarted
+      become: yes
+
+# Create and start the default network
+    - name: Define vdpa default network
+      virt_net:
+        command: define
+        name: vdpa-default
+        xml: "{{ lookup('file', 'vdpa-default-network.xml') }}"
+    
+    - name: Start vdpa default network
+      virt_net:
+        state: active
+        name: vdpa-default
+    - name: Start default network
+      virt_net:
+        state: active
+        name: default
+
+#==============================================================================
+# Create the L1-src VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+#==============================================================================
+    - name: Destroy the guest L1-src VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_src_name }}"
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L1-src vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l1_src_name }}"
+      ignore_errors: true
+
+    - name: Define the L1-src VM
+      virt:
+        command: define
+        name: "{{ guest_l1_src_name }}"
+        xml: "{{ lookup('template', 'nested_dpdk_vdpa/nested-vdpa-net_guest_L1_src.xml.j2') }}"
+        autostart: no
+
+    - name: 加载tun模块
+      modprobe:
+        name: tun
+        state: present
+
+    - name: Start the L1-src VM
+      virt:
+        name: "{{ guest_l1_src_name }}"
+        state: running
+# virsh run as system permission
+        uri: qemu:///system
+      register: l1_src_vm_start_result
+
+    - name: Get the IP address of the virtual machine L1-src
+      shell: virsh domifaddr {{ guest_l1_src_name }}
+      register: l1_src_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L1-src
+      debug:
+        var: l1_src_vm_ip_result
+      when: l1_src_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest VM is running. To go inside the VM type
+          virsh console {{ guest_l1_src_name }}"
+
+    - name: Wait for port 22 to become available on guest l1_src
+      wait_for:
+        host: "{{ guest_l1_src_ip }}"
+        port: 22
+        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_src_ip }} 这个 IP 地址的主机上变得可用。
+
+
+#==============================================================================
+# Create the L1-dst VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+#==============================================================================
+# Create the L1-dst VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+    - name: Destroy the guest L1-dst VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_dst_name }}"
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l1_dst_name }}"
+      ignore_errors: true
+
+    - name: Define the L1-dst VM
+      virt:
+        command: define
+        name: "{{ guest_l1_dst_name}}"
+        xml: "{{ lookup('template', 'nested_dpdk_vdpa/nested-vdpa-net_guest_L1_dst.xml.j2') }}"
+        autostart: no
+
+    - name: Start the L1-dst VM
+      virt:
+        name: "{{ guest_l1_dst_name}}"
+        state: running
+        uri: qemu:///system
+      register: l1_dst_vm_start_result
+
+    - name: Get the IP address of the virtual machine L1-dst
+      shell: virsh domifaddr {{ guest_l1_dst_name }}
+      register: l1_dst_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L1-dst
+      debug:
+        var: l1_dst_vm_ip_result
+      when: l1_dst_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest L1-dst VM is running. To go inside the L1-dst VM type
+          virsh console {{ guest_l1_dst_name }}"
+
+#    - name: Wait for port 22 to become available on guest l1_dst
+#      wait_for:
+#        host: "{{ guest_l1_dst_ip }}"
+#        port: 22
+#        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_dst_ip }} 这个 IP 地址的主机上变得可用。
+
+#    - name: ssh repair
+#      shell: rm -f /home/hao/.ssh/known_hosts
+#      become: yes
+
+#==============================================================================
+# Playbook to run on L1-src to start up L2
+#==============================================================================
+
+# ssh L1-src
+- hosts: l1_src
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+
+# sshfs mount source dir at /mnt/nfs
+    - name: Ensure NFS mount point exists  
+      file:  
+        path: /mnt/nfs  
+        state: directory  
+        mode: '0755'  
+  
+    - name: Mount NFS share  
+      mount:  
+        path: /mnt/nfs  
+        src: '10.2.20.56:{{ build_dir}}'  
+        fstype: nfs  
+#        opts: 'rw,allow_other'  
+        opts: defaults
+        state: mounted
+
+    - name: enable libvirtd in l1 src
+      command: systemctl enable libvirtd
+    - name: start libvirtd in l1 src
+      command: systemctl start libvirtd
+######################################################################################
+# run the dpdk-vdpa examples in l1 src
+# ####################################################################################
+    - name: Ensure /tmp/dpdk-vdpa.sh does not exist  
+      file:  
+        path: /tmp/dpdk-vdpa.sh  
+        state: absent
+
+    - name: Generate dpdk-vdpa command
+      template:
+        dest: /tmp/dpdk-vdpa.sh
+        src: nested_dpdk_vdpa/guest-dpdk-vdpa.j2
+        force: yes
+
+    - name: Kill existing instances of testpmd
+      shell: pgrep dpdk-vdpa | xargs --no-run-if-empty kill
+      ignore_errors: true
+      become: yes
+
+    - name: Kill existing tmux sessions
+      shell: tmux kill-session -t guest-dpdk-vdpa-session
+      ignore_errors: true
+      become: yes
+
+    - name: rm previous socket files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: " {{ dpdk_vdpa_ifaces }}"
+      become: yes
+
+    - name: insert vfio module
+      modprobe:
+        name: vfio
+        state: present
+#        params: "enable_unsafe_noiommu_mode=1"
+
+    - name: insert vfio-pci module
+      modprobe:
+        name: vfio-pci
+        state: present
+
+    - name: insert kvm_intel module
+      modprobe:
+        name: kvm_intel
+        state: present
+
+    - name: Start dpdk-vdpa in the host
+      shell: sh /tmp/dpdk-vdpa.sh
+      become: yes
+
+#    - name: Wait for dpdk-vdpa to initialize unix sockets
+#      wait_for:
+#        path: "{{ item.path }}"
+#        timeout: 5
+#      with_items: " {{ dpdk_vdpa_ifaces }}"
+
+    - name: Change file ownership, group and permissions
+      file:
+        path: "{{ item.path }}"
+        owner: qemu
+        group: qemu
+        mode: '0644'
+      with_items: " {{ dpdk_vdpa_ifaces }}"
+      ignore_errors: true
+    
+######################################################################################
+# Create the L2 VM
+######################################################################################
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+    - name: Destroy the guest L2 VM (in case name colision)
+      virt:
+        name: "{{ guest_l2_name }}"
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L2 vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l2_name }}"
+      ignore_errors: true
+
+    - name: Define the L2 VM
+      virt:
+        command: define
+        name: L2
+        xml: "{{ lookup('template', 'nested_dpdk_vdpa/nested-vdpa-net_guest_L2_src.xml.j2') }}"
+        autostart: no
+
+    - name: Start the L2 VM
+      virt:
+        name: "{{ guest_l2_name }}"
+        state: running
+# virsh run as system permission
+        uri: qemu:///system
+      register: l2_vm_start_result
+      become: yes
+
+    - name: Get the IP address of the virtual machine L2
+      shell: virsh domifaddr "{{ guest_l2_name }}"
+      register: l2_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L2
+      debug:
+        var: l2_vm_ip_result
+      when: l2_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest VM is running. To go inside the VM type
+          virsh console L2"
+
+##############################################################################################
+# ssh L1-dst
+# ###########################################################################################
+- hosts: l1_dst
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+
+# sshfs mount source dir at /mnt/nfs
+    - name: Ensure NFS mount point exists  
+      file:  
+        path: /mnt/nfs  
+        state: directory  
+        mode: '0755'  
+  
+    - name: Mount NFS share  
+      mount:  
+        path: /mnt/nfs  
+        src: '10.2.20.56:{{ build_dir}}'  
+        fstype: nfs  
+#        opts: 'rw,allow_other'  
+        opts: defaults
+        state: mounted
+
+    - name: enable libvirtd in l1 dst
+      command: systemctl enable libvirtd
+    - name: start libvirtd in l1 dst
+      command: systemctl start libvirtd
+
+######################################################################################
+# run the dpdk-vdpa examples in l1 dst
+# ####################################################################################
+    - name: Ensure /tmp/dpdk-vdpa.sh does not exist  
+      file:  
+        path: /tmp/dpdk-vdpa.sh  
+        state: absent
+
+    - name: Undefine guest L2 vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l2_name }}"
+      ignore_errors: true
+
+# run the dpdk-vdpa
+    - name: Generate dpdk-vdpa command
+      template:
+        dest: /tmp/dpdk-vdpa.sh
+        src: nested_dpdk_vdpa/guest-dpdk-vdpa.j2
+        force: yes
+
+    - name: Kill existing instances of testpmd
+      shell: pgrep dpdk-vdpa | xargs --no-run-if-empty kill
+      ignore_errors: true
+      become: yes
+
+    - name: Kill existing tmux sessions
+      shell: tmux kill-session -t guest-dpdk-vdpa-session
+      ignore_errors: true
+      become: yes
+
+    - name: rm previous socket files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: " {{ dpdk_vdpa_ifaces }}"
+      become: yes
+    
+    - name: insert vfio module
+      modprobe:
+        name: vfio
+        state: present
+#        params: "enable_unsafe_noiommu_mode=1"
+
+    - name: insert vfio-pci module
+      modprobe:
+        name: vfio-pci
+        state: present
+
+    - name: insert kvm_intel module
+      modprobe:
+        name: kvm_intel
+        state: present
+
+    - name: Start dpdk-vdpa in the host
+      shell: sh /tmp/dpdk-vdpa.sh
+      become: yes
+
+#    - name: Wait for dpdk-vdpa to initialize unix sockets
+#      wait_for:
+#        path: "{{ item.path }}"
+#        timeout: 5
+#      with_items: " {{ dpdk_vdpa_ifaces }}"
+
+    - name: Change file ownership, group and permissions
+      file:
+        path: "{{ item.path }}"
+        owner: qemu
+        group: qemu
+        mode: '0644'
+      with_items: " {{ dpdk_vdpa_ifaces }}"
+      ignore_errors: true
+
+#==============================================================================
+# target host add tap to bridge
+#==============================================================================
+
+- hosts: kvm_host
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  tasks:
+    - debug: 
+        msg: debug mode is enabled
+    - name: add tap0 to bridge
+      command: brctl addif vdpabr0 tap0
+    - name: add tap1 to bridge
+      command: brctl addif vdpabr0 tap1
+    - name: up tap0
+      command: ifconfig tap0 up
+    - name: up tap1
+      command: ifconfig tap1 up

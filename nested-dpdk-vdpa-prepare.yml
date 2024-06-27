@@ -1,0 +1,500 @@
+# Playbook to set up a basic vdpa-net host on Fedora30
+#
+#
+- hosts: kvm_host  
+  remote_user: chenhao  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+
+    - name: enable repo
+      command: dnf config-manager --set-enabled crb
+
+    - name: install dependencies
+      yum:
+        name:
+          - epel-release
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - dpdk-tools
+          - dpdk
+          - python3-pip  
+        state: present  
+
+    - name: Install elftools  
+      pip:  
+        name: pyelftools  
+        state: present
+
+# In order to run libvirt commands, we need to add the user to the
+# libvirt group
+    - name: Add user to libvirt group 
+      user:
+        groups:
+          - libvirt
+        name: "{{ ansible_facts['user_id'] }}"
+        append: yes
+
+    - name: Restart libvirtd
+      service:
+        name: libvirtd
+        state: restarted
+
+# Download base image if it does not exist
+    - name: Check if the base image file exists
+      stat:
+        path: "{{ base_image_file }}"
+      register: base_image
+      
+    - name: Destroy the guest L1-src VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_src_name }}"
+        state: destroyed
+      ignore_errors: true
+
+      # Create our VM image using the base image as backing store
+    - name: Create l1 src image
+      command: >
+          qemu-img create -f qcow2 -F qcow2 -b 
+           {{ base_image_file }}
+           {{ guest_l1_src_image_file }}
+           20G
+
+    - name: Prepare l1 src image
+      command: >
+         virt-sysprep --root-password password:{{ guest_l1_src_root_password }}
+           --run-command="sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config"
+           --run-command="dnf config-manager --set-enabled crb"
+           --run-command='grubby --args="nokaslr" --update-kernel=ALL'
+           --run-command='grubby --update-kernel=ALL --args="intel_iommu=on iommu=pt"'
+           --uninstall cloud-init 
+           --network
+           --install "libvirt-daemon-kvm,libvirt"
+           --selinux-relabel 
+           --hostname {{ guest_l1_src_name }}
+           -a {{ guest_l1_src_image_file }}
+      environment:
+        LLIBVIRT_DEFAULT_URI: qemu:///system
+
+    - name: Destroy the guest L1-dst VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_dst_name }}"
+        state: destroyed
+      ignore_errors: true
+
+      # Create our VM image using the base image as backing store
+    - name: Create l1 dst image
+      command: >
+          qemu-img create -f qcow2 -F qcow2 -b 
+           {{ base_image_file }}
+           {{ guest_l1_dst_image_file }}
+           20G
+
+    - name: Prepare l1 dst image
+      command: >
+         virt-sysprep --root-password password:{{ guest_l1_dst_root_password }}
+           --run-command="sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config"
+           --run-command="dnf config-manager --set-enabled crb"
+           --run-command='grubby --args="nokaslr" --update-kernel=ALL'
+           --run-command='grubby --update-kernel=ALL --args="intel_iommu=on iommu=pt"'
+           --uninstall cloud-init 
+           --network
+           --install "libvirt-daemon-kvm,libvirt"
+           --selinux-relabel 
+           --hostname {{ guest_l1_dst_name }}
+           -a {{ guest_l1_dst_image_file }}
+      environment:
+        LLIBVIRT_DEFAULT_URI: qemu:///system
+
+      # Create our VM image using the base image as backing store
+    - name: Create l2 image
+      command: >
+          qemu-img create -f qcow2 -F qcow2 -b 
+           {{ base_image_name }}
+           {{ guest_l2_name }}.qcow2
+           20G
+      args:  
+        chdir: "{{ build_dir }}/qcow2/"
+
+    - name: Prepare l2 image
+      command: >
+         virt-sysprep --root-password password:{{ guest_l2_root_password }}
+           --run-command="sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config"
+           --uninstall cloud-init 
+           --network
+           --install "tmux,pciutils,net-tools"
+           --selinux-relabel 
+           --hostname {{ guest_l2_name }}
+           -a {{ guest_l2_name }}.qcow2
+      environment:
+        LLIBVIRT_DEFAULT_URI: qemu:///system
+      args:  
+        chdir: "{{ build_dir }}/qcow2/"
+
+    - name: update ssh know hosts
+      command: rm -rf /home/hao/.ssh/known_hosts
+
+
+# Create and start the default network
+    - name: Define vdpa default network
+      virt_net:
+        command: define
+        name: vdpa-default
+        xml: "{{ lookup('file', 'vdpa-default-network.xml') }}"
+    
+    - name: Start vdpa default network
+      virt_net:
+        state: active
+        name: vdpa-default
+    - name: Start default network
+      virt_net:
+        state: active
+        name: default
+
+#==============================================================================
+# Create the L1-src VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+#==============================================================================
+    - name: Destroy the guest L1-src VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_src_name }}"
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L1-src vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l1_src_name }}"
+      ignore_errors: true
+
+    - name: Define the L1-src VM
+      virt:
+        command: define
+        name: "{{ guest_l1_src_name}}"
+        xml: "{{ lookup('template', 'nested_dpdk_vdpa/nested-vdpa-net_guest_L1_src.xml.j2') }}"
+        autostart: no
+
+    - name: 加载tun模块
+      modprobe:
+        name: tun
+        state: present
+
+    - name: Start the L1-src VM
+      virt:
+        name: "{{ guest_l1_src_name}}"
+        state: running
+# virsh run as system permission
+        uri: qemu:///system
+      register: l1_src_vm_start_result
+      become: yes
+
+    - name: Get the IP address of the virtual machine L1-src
+      shell: virsh domifaddr {{ guest_l1_src_name }}
+      register: l1_src_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L1-src
+      debug:
+        var: l1_src_vm_ip_result
+      when: l1_src_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest VM is running. To go inside the VM type
+          virsh console {{ guest_l1_src_name }}"
+
+    - name: Wait for port 22 to become available on guest l1_src
+      wait_for:
+        host: "{{ guest_l1_src_ip }}"
+        port: 22
+        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_src_ip }} 这个 IP 地址的主机上变得可用。
+
+
+#==============================================================================
+# Create the L1-dst VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+#==============================================================================
+    - name: Destroy the guest L1-dst VM (in case name colision)
+      virt:
+        name: "{{ guest_l1_dst_name }}"
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest vm (in case name colision)
+      virt:
+        command: undefine
+        name: "{{ guest_l1_dst_name }}"
+      ignore_errors: true
+
+    - name: Define the L1-dst VM
+      virt:
+        command: define
+        name: "{{ guest_l1_dst_name}}"
+        xml: "{{ lookup('template', 'nested_dpdk_vdpa/nested-vdpa-net_guest_L1_dst.xml.j2') }}"
+        autostart: no
+
+    - name: Start the L1-dst VM
+      virt:
+        name: "{{ guest_l1_dst_name}}"
+        state: running
+        uri: qemu:///system
+      register: l1_dst_vm_start_result
+
+    - name: Get the IP address of the virtual machine L1-dst
+      shell: virsh domifaddr {{ guest_l1_dst_name }}
+      register: l1_dst_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L1-dst
+      debug:
+        var: l1_dst_vm_ip_result
+      when: l1_dst_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest L1-dst VM is running. To go inside the L1-dst VM type
+          virsh console {{ guest_l1_dst_name }}"
+
+    - name: Wait for port 22 to become available on guest l1_dst
+      wait_for:
+        host: "{{ guest_l1_dst_ip }}"
+        port: 22
+        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_dst_ip }} 这个 IP 地址的主机上变得可用。
+
+    - name: Get the IP address of the virtual machine L1-dst
+      shell: rm -f /home/hao/.ssh/known_hosts
+
+#==============================================================================
+# Playbook to run on L1-src to start up {{ guest_l2_name }}
+#==============================================================================
+
+# ssh L1-src
+- hosts: l1_src
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+
+    - name: install dependencies
+      yum:
+        name:
+          - epel-release
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - tmux
+          - dpdk-tools
+#          - fuse-sshfs
+          - vim
+          - make
+          - gcc
+#          - ctags
+          - tree
+          - git
+#          - bridge-utils
+          - glib2-devel
+          - bzip2
+          - pixman-devel
+          - libcurl-devel
+          - libvirt
+          - virt-install
+          - SDL2-devel
+          - pciutils
+          - gtk3-devel
+          - telnet
+          - gdb
+        state: installed
+
+    - name: 在/etc/hosts末尾添加一行 DNS 解析
+      lineinfile:
+        path: /etc/hosts
+        line: "10.2.20.56 hao.vdpa.com"
+        insertafter: EOF  # 在文件末尾插入
+
+    - name: install  my dpdk rpm(with yusur vdpa driver)
+      command: rpm -ivh --force http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+
+    - name: Install qemu rpm on l1_src
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+
+# disable selinux
+    - name: 设置SELinux为permissive模式（允许模式），虚拟机从而能够访问{{ guest_l2_name }}.qcow2
+      selinux:  
+        policy: targeted  
+        state: permissive  
+  
+    - name: 禁用SELinux  
+      selinux:  
+        state: disabled  
+  
+    - name: 设置SELinux配置文件  
+      lineinfile:  
+        path: /etc/selinux/config  
+        regexp: '^SELINUX='  
+        line: 'SELINUX=disabled'
+
+    - name: 禁用SELinux  
+      shell: setenforce 0  
+      ignore_errors: true
+
+    - name: Change user and group to root  
+      lineinfile:  
+        path: /etc/libvirt/qemu.conf  
+        regexp: '^(#user|user) = "qemu"$'  
+        line: 'user = "root"'  
+        backrefs: yes  
+  
+    - name: Change group to root  
+      lineinfile:  
+        path: /etc/libvirt/qemu.conf  
+        regexp: '^(#group|group) = "qemu"$'  
+        line: 'group = "root"'  
+        backrefs: yes  
+
+    - name: Add cgroup_device_acl block to the end of the file  
+      blockinfile:  
+        path: /etc/libvirt/qemu.conf  
+        block: |  
+          cgroup_device_acl = [  
+              "/dev/null", "/dev/full", "/dev/zero",  
+              "/dev/random", "/dev/urandom",  
+              "/dev/ptmx", "/dev/kvm",  
+              "/dev/vhost-vdpa-0"  
+          ]  
+        insertafter: EOF
+
+    - name: Poweroff l1 src VM
+      community.general.shutdown:
+
+
+#==============================================================================
+# playbook to run on l1-dst to set env
+#==============================================================================
+
+# ssh l1-dst
+- hosts: l1_dst
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-dpdk_settings.yml
+  tasks:
+    - debug: 
+        msg: debug mode is enabled
+
+    - name: install dependencies
+      yum:
+        name:
+          - epel-release
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - tmux
+          - dpdk-tools
+#          - fuse-sshfs
+          - vim
+          - make
+          - gcc
+#          - ctags
+          - tree
+          - git
+#          - bridge-utils
+          - glib2-devel
+          - bzip2
+          - pixman-devel
+          - libcurl-devel
+          - libvirt
+          - virt-install
+          - SDL2-devel
+          - pciutils
+          - gtk3-devel
+          - telnet
+          - gdb
+        state: installed
+
+    - name: 在/etc/hosts末尾添加一行 DNS 解析
+      lineinfile:
+        path: /etc/hosts
+        line: "10.2.20.56 hao.vdpa.com"
+        insertafter: EOF  # 在文件末尾插入
+
+    - name: install  my dpdk rpm(with yusur vdpa driver)
+      command: rpm -ivh --force http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+
+    - name: Install qemu rpm on l1_src
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+
+# disable selinux
+    - name: 设置SELinux为permissive模式（允许模式），虚拟机从而能够访问{{ guest_l2_name }}.qcow2
+      selinux:  
+        policy: targeted  
+        state: permissive  
+  
+    - name: 禁用SELinux  
+      selinux:  
+        state: disabled  
+  
+    - name: 设置SELinux配置文件  
+      lineinfile:  
+        path: /etc/selinux/config  
+        regexp: '^SELINUX='  
+        line: 'SELINUX=disabled'
+
+    - name: 禁用SELinux  
+      shell: setenforce 0  
+      ignore_errors: true
+
+    - name: Change user and group to root  
+      lineinfile:  
+        path: /etc/libvirt/qemu.conf  
+        regexp: '^(#user|user) = "qemu"$'  
+        line: 'user = "root"'  
+        backrefs: yes  
+  
+    - name: Change group to root  
+      lineinfile:  
+        path: /etc/libvirt/qemu.conf  
+        regexp: '^(#group|group) = "qemu"$'  
+        line: 'group = "root"'  
+        backrefs: yes  
+
+    - name: Add cgroup_device_acl block to the end of the file  
+      blockinfile:  
+        path: /etc/libvirt/qemu.conf  
+        block: |  
+          cgroup_device_acl = [  
+              "/dev/null", "/dev/full", "/dev/zero",  
+              "/dev/random", "/dev/urandom",  
+              "/dev/ptmx", "/dev/kvm",  
+              "/dev/vhost-vdpa-0"  
+          ]  
+        insertafter: EOF
+
+    - name: Poweroff l1 dst VM
+      community.general.shutdown:

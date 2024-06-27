@@ -1,4 +1,10 @@
-localhost-py3 ansible_host=localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+[kvm_host]
+10.2.20.56 ansible_ssh_user=hao ansible_ssh_pass=1 ansible_python_interpreter=/usr/bin/python3
 
-[kvm-host]
-localhost-py3
+# ansible_ssh_extra_args='-o StrictHostKeyChecking=no'
+[l1_src]
+192.168.122.56 ansible_ssh_user=root ansible_ssh_pass=1
+
+[l1_dst]
+192.168.122.72 ansible_ssh_user=root ansible_ssh_pass=1
+
