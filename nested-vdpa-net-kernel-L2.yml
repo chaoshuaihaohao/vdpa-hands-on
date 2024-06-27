@@ -1,0 +1,102 @@
+# Playbook to set up a basic vdpa-net host on Fedora30
+#
+#
+
+# ssh L1-src
+- hosts: l1_src
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+    - name: install dependencies
+      yum:
+        name:
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - fuse-sshfs
+        state: installed
+      become: yes
+
+# sshfs mount source dir at /mnt/nfs
+
+# disable selinux
+    - name: 设置SELinux为permissive模式（允许模式）  
+      selinux:  
+        policy: targeted  
+        state: permissive  
+  
+    - name: 禁用SELinux  
+      selinux:  
+        state: disabled  
+  
+    - name: 设置SELinux配置文件  
+      lineinfile:  
+        path: /etc/selinux/config  
+        regexp: '^SELINUX='  
+        line: 'SELINUX=disabled'
+
+    - name: 禁用SELinux  
+      shell: setenforce 0  
+      ignore_errors: true
+# Create the L2 VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+    - name: Destroy the guest L2 VM (in case name colision)
+      virt:
+        name: L2
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L2 vm (in case name colision)
+      virt:
+        command: undefine
+        name: L2
+      ignore_errors: true
+
+    - name: Define the L2 VM
+      virt:
+        command: define
+        name: L2
+        xml: "{{ lookup('template', 'nested-vdpa-net_guest_L2.xml.j2') }}"
+        autostart: no
+
+    - name: add /dev/vhost-vdpa0 device
+      command: ./insmod.sh
+#      command: ./insmod_origin.sh
+      args:  
+        chdir: /root/driver/
+      ignore_errors: true
+
+    - name: Start the L2 VM
+      virt:
+        name: L2
+        state: running
+# virsh run as system permission
+        uri: qemu:///system
+      register: l2_vm_start_result
+      become: yes
+
+    - name: Get the IP address of the virtual machine L2
+      shell: virsh domifaddr L2
+      register: l2_vm_ip_result
+      ignore_errors: yes
+
+    - name: Display the IP address of the virtual machine L2
+      debug:
+        var: l2_vm_ip_result
+      when: l2_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest VM is running. To go inside the VM type
+          virsh console L2"
