@@ -6,14 +6,14 @@ or other application using the libvirt API.
 -->
 
 <domain type='kvm'>
-  <name>{{ guest_l2_name }}</name>
+  <name>L2</name>
   <uuid>53f91a49-e410-4815-be9b-0d7c463c526a</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://centos.org/centos-stream/9"/>
     </libosinfo:libosinfo>
   </metadata>
-  <memory locked="yes" unit='KiB'>2097152</memory>
+  <memory unit='KiB'>2097152</memory>
   <currentMemory unit='KiB'>2097152</currentMemory>
   <vcpu placement='static'>2</vcpu>
   <os>
@@ -41,10 +41,10 @@ or other application using the libvirt API.
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='{{ guest_l2_image_file }}'/>
-      <target dev='sda' bus='sata'/>
-      <address type='drive' controller='0' bus='0' target='0' unit='0'/>
-    </disk>    
+      <source file='/mnt/nfs/qcow2/L2.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
+    </disk>
     <controller type='usb' index='0' model='qemu-xhci' ports='15'>
       <address type='pci' domain='0x0000' bus='0x02' slot='0x00' function='0x0'/>
     </controller>
@@ -122,11 +122,21 @@ or other application using the libvirt API.
     <controller type='sata' index='0'>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x1f' function='0x2'/>
     </controller>
-<!--    
+    <controller type='virtio-serial' index='0'>
+      <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+    </controller>
+<!--
+    <interface type='network'>
+      <mac address='52:54:00:50:4a:1c'/>
+      <source network='default'/>
+      <target dev='L2_virtio'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+    </interface>
+-->
     <interface type='vdpa'>
 	    <source dev='/dev/vhost-vdpa-0'/>
     </interface>
--->    
     <serial type='pty'>
       <target type='isa-serial' port='0'>
         <model name='isa-serial'/>
@@ -135,22 +145,24 @@ or other application using the libvirt API.
     <console type='pty'>
       <target type='serial' port='0'/>
     </console>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+      <address type='virtio-serial' controller='0' bus='0' port='1'/>
+    </channel>
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
     <audio id='1' type='none'/>
     <watchdog model='itco' action='reset'/>
-    <memballoon model='none'>
+    <memballoon model='virtio'>
       <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
     </memballoon>
+    <rng model='virtio'>
+      <backend model='random'>/dev/urandom</backend>
+      <address type='pci' domain='0x0000' bus='0x06' slot='0x00' function='0x0'/>
+    </rng>
   </devices>
   <qemu:commandline xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
-    <qemu:arg value='-monitor'/>
-    <qemu:arg value='tcp:localhost:5555,server,nowait'/>
-    <qemu:arg value='-netdev'/>
-    <qemu:arg
-    value='type=vhost-vdpa,vhostdev=/dev/vhost-vdpa-0,id=vhost-vdpa0,x-svq=on'/>
-    <qemu:arg value='-device'/>
-    <qemu:arg
-    value='virtio-net-pci,netdev=vhost-vdpa0,bus=pcie.0,addr=0x3,guest_announce=off,queue_reset=off,indirect_desc=off'/>
+	<qemu:arg value='-incoming'/>
+	<qemu:arg value='tcp:0:6666'/>
   </qemu:commandline>
 </domain>

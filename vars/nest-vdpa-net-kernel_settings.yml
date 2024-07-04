@@ -23,3 +23,10 @@ guest_l2_name: kernel-vdpa
 guest_l2_root_password: 1 # Change this password to your own
 guest_l2_image_file: "{{ mount_path }}/qcow2/{{ guest_l2_name }}.qcow2"
 
+
+#qemu
+#github_path: /home/hao/www/github
+#qemu_path: /home/hao/www/github/qemu
+#
+github_path: /home/hao/github
+qemu_path: "{{ github_path }}/qemu"

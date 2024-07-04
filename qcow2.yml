@@ -1,0 +1,88 @@
+---  
+- name: Download qemu-dev.tar.gz from GitLab to local {{ build_dir }}/source directory  
+  hosts: localhost  
+  become: yes  
+  become_method: sudo  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+
+  tasks:  
+    - name: Ensure "{{ build_dir }}/qemu_source" directory exists
+      file:  
+        path: "{{ build_dir }}/qemu_source"
+        state: directory  
+        mode: '0755'  
+  
+    - name: Download qemu-dev.tar.gz to {{ build_dir }}/qemu_source
+      get_url:  
+        url: http://hao.vdpa.com/qemu_source/qemu.tar.xz
+        dest: "{{ build_dir }}/qemu_source/qemu.tar.gz"
+        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+        timeout: 300  
+        force: no  # Force download even if file already exists      
+
+    - name: Download qemu.spec to {{ build_dir }}/qemu_source
+      get_url:  
+        url: http://hao.vdpa.com/qemu_source/qemu.tar.xz
+        dest: "{{ build_dir }}/qemu_source/qemu.tar.gz"
+        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+        timeout: 300  
+        force: no  # Force download even if file already exists      
+
+    - name: Build QEMU RPM
+      command: rpmbuild -ba ./qemu.spec  
+      args:  
+        chdir: "{{ build_dir }}/qemu_source"
+
+    - name: Ensure "{{ build_dir }}/rpm" directory exists
+      file:  
+        path: "{{ build_dir }}/rpm"
+        state: directory  
+        mode: '0755'  
+
+#    - name: Copy QEMU RPM to {{ build_dir }}/rpm
+#      command:   
+#      args:  
+#        chdir: "{{ build_dir }}/qemu_source"
+
+#    - name: Cleanup downloaded archive (optional)
+#      file:
+#        path: /mnt/nfs/qemu-dev.tar.gz
+#        state: absent
+
+
+  tasks:
+    - name: Ensure "{{ build_dir }}/qcow2" directory exists
+      file:  
+        path: "{{ build_dir }}/qcow2"
+        state: directory  
+        mode: '0755'  
+
+    - name: Download origin qcow2
+      get_url:
+        url: http://hao.vdpa.com/qcow2/CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+        dest: "{{ build_dir }}/qcow2/"
+        mode: '0644'
+        force: no
+
+    - name: create L1-src.qcow2
+      command: qemu-img create -f qcow2 -b  ./CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2 -F qcow2  ./L1-src.qcow2
+      args:  
+        chdir: "{{ build_dir }}/qcow2"
+
+#    - name: change the passwd of L1-src.qcow2
+#      command: virt-sysprep --root-password password:{{ guest_l1_src_root_password }} --uninstall cloud-init --selinux-relabel -a L1-src.qcow2 --network --install "dpdk,dpdk-tools,fuse-sshfs,vim,make,gcc,ctags,tree,git,bridge-utils,glib2-devel,bzip2,pixman-devel,libcurl-devel,libvirt,virt-install,SDL2-devel,pciutils"
+#      args:  
+#        chdir: "{{ build_dir }}/qcow2"
+      
+#    - name: disable selinux of L1-src.qcow2
+#      command: virt-customize -a ./L1-src.qcow2 --selinux-permissive
+#      args:  
+#        chdir: "{{ build_dir }}/qcow2"
+
+#    - name: enable ssh L1-src.qcow2 by root
+#      command: virt-sysprep --run-command="sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config" -a ./L1-src.qcow2
+#      args:  
+#        chdir: "{{ build_dir }}/qcow2"

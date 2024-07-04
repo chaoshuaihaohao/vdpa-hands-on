@@ -1,0 +1,26 @@
+build_dir: /home/vdpa
+base_image_name: CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+base_image_file: "{{ build_dir }}/qcow2/{{ base_image_name }}"
+remote_base_file: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+#remote_base_file: http://hao.vdpa.com/qcow2/CentOS-Stream-GenericCloud-9-20240212.0.x86_64.qcow2
+
+
+
+
+guest_name: dpdk-vdpa
+guest_root_password: 1
+guest_mac: 02:ca:fe:fa:ce:01
+guest_ip: 192.168.122.56    # Default management IP address
+vm_image_file: "{{ build_dir }}/qcow2/{{ guest_name }}.qcow2"
+
+
+# dpdk-vdpa interfaces
+vhost_ifaces:
+  - mac: 74:3e:39:00:00:00 
+    pci_addr:
+      domain: '0000'
+      bus: '0a'
+      slot: '00'
+      function: '0'
+    rx_queue_size: 256
+    path: /tmp/vdpa-socket0

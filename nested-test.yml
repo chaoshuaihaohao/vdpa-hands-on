@@ -11,6 +11,19 @@
   tasks:
     - debug: 
         msg: Debug mode is enabled
+    - name: install dependencies
+      yum:
+        name:
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - fuse-sshfs
+        state: installed
+      become: yes
 
 # modify /etc/libvirt/qemu.conf user = "root", group = "root" and add
 # cgroup_device_acl = [
@@ -29,36 +42,81 @@
           - libvirt
         name: "{{ ansible_facts['user_id'] }}"
         append: yes
+      become: yes
 
     - name: Restart libvirtd
       service:
         name: libvirtd
         state: restarted
+      become: yes
 
-    - name: Destroy the guest L1-src VM (in case name colision)
-      virt:
-        name: "{{ guest_l1_src_name }}"
-        state: destroyed
+    - name: Check if /mnt/nfs exists
+      stat:
+        path: /mnt/nfs
+      register: nfs_dir
       ignore_errors: true
+      become: yes
+
+    - name: Create /mnt/nfs if it does not exist
+      file:
+        path: /mnt/nfs
+        state: directory
+        mode: '0755'
+      when: not nfs_dir.stat.exists
+
+#    - name: umount /mnt/nfs if it's mounted
+#      mount:
+#        path: /mnt/nfs
+#        state: unmounted
+#      become: yes
+
+#    - name: mount source dir to /mnt/nfs
+#      shell: sshfs -o rw,allow_other root@10.2.20.56:/home/hao/nfs /mnt/nfs
+      #delegate_to: localhost
+#      become: yes
+
+    - name: Restart libvirtd
+      service:
+        name: libvirtd
+        state: restarted
+      become: yes
+
+# Download base image if it does not exist
+#  - name: Check if the base image file exists
+#    stat:
+#      path: "{{ base_image_file }}"
+#    register: base_image
     
-    - name: Destroy the guest L1-dst VM (in case name colision)
-      virt:
-        name: "{{ guest_l1_dst_name }}"
-        state: destroyed
-      ignore_errors: true
+    # Create our VM image using the base image as backing store
+#  - name: Create image
+#    command: >
+#        qemu-img create -f qcow2 -F qcow2 -b 
+#         {{ base_image_file }}
+#         {{ vm_image_file }}
+#         20G
+#    become: yes
+
+#  - name: Prepare image
+#    command: >
+#       virt-sysprep --root-password password:{{ guest_root_password }}
+#         --uninstall cloud-init 
+#         --selinux-relabel 
+#         -a {{ vm_image_file }}
+#    environment:
+#      LLIBVIRT_DEFAULT_URI: qemu:///system
+#    become: yes
 
 # Create and start the default network
-    - name: Define vdpa default network
+    - name: Define virtio default network
       virt_net:
         command: define
-        name: vdpa-default
-#        xml: "{{ lookup('file', 'vdpa-default-network.xml') }}"
-        xml: "{{ lookup('file', 'vdpa-default-network.xml') }}"
+        name: virtio-default
+        xml: "{{ lookup('file', 'virtio-default-network.xml') }}"
     
-    - name: Start vdpa default network
+    - name: Start virtio default network
       virt_net:
         state: active
-        name: vdpa-default
+        name: virtio-default
     - name: Start default network
       virt_net:
         state: active
@@ -85,7 +143,7 @@
       virt:
         command: define
         name: "{{ guest_l1_src_name}}"
-        xml: "{{ lookup('template', 'nested_kernel_vdpa/nested-vdpa-net_guest_L1_src.xml.j2') }}"
+        xml: "{{ lookup('template', 'nested-vdpa-net_guest_L1_src.xml.j2') }}"
         autostart: no
 
     - name: 加载tun模块
@@ -151,7 +209,7 @@
       virt:
         command: define
         name: "{{ guest_l1_dst_name}}"
-        xml: "{{ lookup('template', 'nested_kernel_vdpa/nested-vdpa-net_guest_L1_dst.xml.j2') }}"
+        xml: "{{ lookup('template', 'nested-vdpa-net_guest_L1_dst.xml.j2') }}"
         autostart: no
 
     - name: Start the L1-dst VM
@@ -176,17 +234,19 @@
           "Now the Guest L1-dst VM is running. To go inside the L1-dst VM type
           virsh console {{ guest_l1_dst_name }}"
 
-    - name: Wait for port 22 to become available on guest l1_dst
-      wait_for:
-        host: "{{ guest_l1_dst_ip }}"
-        port: 22
-        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_dst_ip }} 这个 IP 地址的主机上变得可用。
+    - debug: 
+        msg: >
+          "sshfs -o rw,allow_other root@10.2.20.56:/home/hao/nfs /mnt/nfs"
 
-    - name: Get the IP address of the virtual machine L1-dst
-      shell: rm -f /home/hao/.ssh/known_hosts
+#    - name: Wait for port 22 to become available on guest l1_dst
+#      wait_for:
+#        host: "{{ guest_l1_dst_ip }}"
+#        port: 22
+#        delay: 5    #每 5 秒检查一次端口 22 是否在 {{ guest_l1_dst_ip }} 这个 IP 地址的主机上变得可用。
+
 
 #==============================================================================
-# Playbook to run on L1-src to start up {{ guest_l2_name }}
+# Playbook to run on L1-src to start up L2
 #==============================================================================
 
 # ssh L1-src
@@ -200,6 +260,19 @@
   tasks:
     - debug: 
         msg: Debug mode is enabled
+    - name: install dependencies
+      yum:
+        name:
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - fuse-sshfs
+        state: installed
+      become: yes
 
 # sshfs mount source dir at /mnt/nfs
     - name: Ensure NFS mount point exists  
@@ -211,76 +284,81 @@
     - name: Mount NFS share  
       mount:  
         path: /mnt/nfs  
-        src: '10.2.20.56:/home/vdpa/'  
-#       src: '10.2.20.56:/home/hao/www'  
+        src: '10.2.20.56:/home/hao/nfs'  
         fstype: nfs  
 #        opts: 'rw,allow_other'  
         opts: defaults
         state: mounted
       delegate_to: "{{ guest_l1_src_ip }}"  # 使用虚拟机的IP地址作为目标主机
-
     - name: Ensure /lib/modules/6.6.0/build symlink exists  
       file:  
-        src: "/mnt/nfs/github/linux"  # 这是软链接指向的目标路径  
+        src: /mnt/nfs/linux  # 这是软链接指向的目标路径  
         dest: /lib/modules/6.6.0/build  # 这是软链接的路径  
         state: link  # 指定创建的是软链接
 
-    - name: l1 src 加载tun模块
-      modprobe:
-        name: tun
-        state: present
-    - name: l1 src 加载kvm_intel模块
-      modprobe:
-        name: kvm_intel
-        state: present
+# disable selinux
+    - name: 设置SELinux为permissive模式（允许模式），虚拟机从而能够访问L2.qcow2
+      selinux:  
+        policy: targeted  
+        state: permissive  
+  
+    - name: 禁用SELinux  
+      selinux:  
+        state: disabled  
+  
+    - name: 设置SELinux配置文件  
+      lineinfile:  
+        path: /etc/selinux/config  
+        regexp: '^SELINUX='  
+        line: 'SELINUX=disabled'
+
+    - name: 禁用SELinux  
+      shell: setenforce 0  
+      ignore_errors: true
+# Create the L2 VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+    - name: Destroy the guest L2 VM (in case name colision)
+      virt:
+        name: L2
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L2 vm (in case name colision)
+      virt:
+        command: undefine
+        name: L2
+      ignore_errors: true
+
+    - name: Define the L2 VM
+      virt:
+        command: define
+        name: L2
+        xml: "{{ lookup('template', 'nested-vdpa-net_guest_L2.xml.j2') }}"
+        autostart: no
 
     - name: add /dev/vhost-vdpa0 device
       command: ./insmod.sh
 #      command: ./insmod_origin.sh
       args:  
-        chdir: /mnt/nfs/github/yusur_kernel_vdpa_driver
+        chdir: /mnt/nfs/driver/
       ignore_errors: true
 
-# Create the {{ guest_l2_name }} VM
-# Before actually creating it, let's ensure there is no VM with the same name
-# is already configured
-    - name: Destroy the guest {{ guest_l2_name }} VM (in case name colision)
+    - name: Start the L2 VM
       virt:
-        name: "{{ guest_l2_name }}"
-        state: destroyed
-      ignore_errors: true
-    
-    - name: Undefine guest {{ guest_l2_name }} vm (in case name colision)
-      virt:
-        command: undefine
-        name: "{{ guest_l2_name }}"
-      ignore_errors: true
-
-    - name: Define the {{ guest_l2_name }} VM
-      virt:
-        command: define
-        name: "{{ guest_l2_name }}"
-        xml: "{{ lookup('template', 'nested_kernel_vdpa/nested-vdpa-net_guest_L2.xml.j2') }}"
-        autostart: no
-
-    - name: Edit the XML configuration of the virtual machine  
-      command: virt-xml {{ guest_l2_name }} --edit --memorybacking locked=on          
-
-    - name: Start the {{ guest_l2_name }} VM
-      virt:
-        name: "{{ guest_l2_name }}"
+        name: L2
         state: running
 # virsh run as system permission
         uri: qemu:///system
       register: l2_vm_start_result
       become: yes
 
-    - name: Get the IP address of the virtual machine {{ guest_l2_name }}
-      shell: virsh domifaddr {{ guest_l2_name }}
+    - name: Get the IP address of the virtual machine L2
+      shell: virsh domifaddr L2
       register: l2_vm_ip_result
       ignore_errors: yes
 
-    - name: Display the IP address of the virtual machine {{ guest_l2_name }}
+    - name: Display the IP address of the virtual machine L2
       debug:
         var: l2_vm_ip_result
       when: l2_vm_ip_result.rc == 0
@@ -288,86 +366,6 @@
     - debug: 
         msg: >
           "Now the Guest VM is running. To go inside the VM type
-          virsh console {{ guest_l2_name }}"
+          virsh console L2"
 
 
-#==============================================================================
-# playbook to run on l1-dst to set env
-#==============================================================================
-
-# ssh l1-dst
-- hosts: l1_dst
-  remote_user: root  # 替换为您的远程用户名  
-  become: yes                 # 如果需要root权限  
-  become_method: sudo        # 或者使用其他的提权方式  
-  become_user: root          # 如果需要特定的用户来执行命令  
-  vars_files:
-    - vars/nest-vdpa-net-kernel_settings.yml
-  tasks:
-    - debug: 
-        msg: debug mode is enabled
-
-# sshfs mount source dir at /mnt/nfs
-    - name: Ensure NFS mount point exists  
-      file:  
-        path: /mnt/nfs  
-        state: directory  
-        mode: '0755'  
-  
-    - name: Mount NFS share  
-      mount:  
-        path: /mnt/nfs  
-        src: '10.2.20.56:/home/vdpa/'  
-#        src: '10.2.20.56:/home/hao/www'  
-        fstype: nfs  
-#        opts: 'rw,allow_other'  
-        opts: defaults
-        state: mounted
-      delegate_to: "{{ guest_l1_dst_ip }}"  # 使用虚拟机的IP地址作为目标主机
-
-    - name: Ensure /lib/modules/6.6.0/build symlink exists  
-      file:  
-        src: "/mnt/nfs/github/linux"  # 这是软链接指向的目标路径  
-        dest: /lib/modules/6.6.0/build  # 这是软链接的路径  
-        state: link  # 指定创建的是软链接
-
-    - name: l1 dst 加载tun模块
-      modprobe:
-        name: tun
-        state: present
-    - name: l1 dst 加载kvm_intel模块
-      modprobe:
-        name: kvm_intel
-        state: present
-
-    - name: add /dev/vhost-vdpa0 device
-      command: ./insmod.sh
-#      command: ./insmod_origin.sh
-      args:  
-        chdir: /mnt/nfs/github/yusur_kernel_vdpa_driver
-      ignore_errors: true
-
-
-#==============================================================================
-# target host add tap to bridge
-#==============================================================================
-
-# ssh l1-dst
-- hosts: kvm_host
-  remote_user: root  # 替换为您的远程用户名  
-  become: yes                 # 如果需要root权限  
-  become_method: sudo        # 或者使用其他的提权方式  
-  become_user: root          # 如果需要特定的用户来执行命令  
-  vars_files:
-    - vars/nest-vdpa-net-kernel_settings.yml
-  tasks:
-    - debug: 
-        msg: debug mode is enabled
-    - name: add tap0 to bridge
-      command: brctl addif vdpabr0 tap0
-    - name: add tap1 to bridge
-      command: brctl addif vdpabr0 tap1
-    - name: up tap0
-      command: ifconfig tap0 up
-    - name: up tap1
-      command: ifconfig tap1 up

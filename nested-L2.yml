@@ -1,0 +1,169 @@
+#==============================================================================
+# Playbook to run on L1-src to start up L2
+#==============================================================================
+
+# ssh L1-dst
+- hosts: l1_dst
+  remote_user: root  # 替换为您的远程用户名  
+  become: yes                 # 如果需要root权限  
+  become_method: sudo        # 或者使用其他的提权方式  
+  become_user: root          # 如果需要特定的用户来执行命令  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+  tasks:
+    - debug: 
+        msg: Debug mode is enabled
+    - name: install dependencies
+      yum:
+        name:
+          - qemu-kvm
+          - libvirt-daemon-kvm
+          - libvirt
+          - iperf3
+          - virt-install
+          - libguestfs-tools-c
+          - python3-lxml
+          - fuse-sshfs
+          - vim
+          - make
+          - gcc
+          - ctags
+          - tree
+          - git
+          - bridge-utils
+          - glib2-devel
+          - bzip2
+          - pixman-devel
+          - libcurl-devel
+          - libvirt
+          - virt-install
+          - SDL2-devel
+          - pciutils
+          - gtk3-devel
+        state: installed
+      become: yes
+
+# sshfs mount source dir at /mnt/nfs
+    - name: Ensure NFS mount point exists  
+      file:  
+        path: /mnt/nfs  
+        state: directory  
+        mode: '0755'  
+  
+    - name: Mount NFS share  
+      mount:  
+        path: /mnt/nfs  
+        src: '10.2.20.56:/home/hao/nfs'  
+        fstype: nfs  
+#        opts: 'rw,allow_other'  
+        opts: defaults
+        state: mounted
+      delegate_to: "{{ guest_l1_dst_ip }}"  # 使用虚拟机的IP地址作为目标主机
+    - name: Ensure /lib/modules/6.6.0/build symlink exists  
+      file:  
+        src: /mnt/nfs/linux  # 这是软链接指向的目标路径  
+        dest: /lib/modules/6.6.0/build  # 这是软链接的路径  
+        state: link  # 指定创建的是软链接
+
+# disable selinux
+    - name: 设置SELinux为permissive模式（允许模式）  
+      selinux:  
+        policy: targeted  
+        state: permissive  
+  
+    - name: 禁用SELinux  
+      selinux:  
+        state: disabled  
+  
+    - name: 设置SELinux配置文件  
+      lineinfile:  
+        path: /etc/selinux/config  
+        regexp: '^SELINUX='  
+        line: 'SELINUX=disabled'
+
+    - name: 禁用SELinux  
+      shell: setenforce 0  
+      ignore_errors: true
+
+    - name: Install the qemu rpm package  
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+
+    - name: Install kernel RPM package
+      command: rpm --force --nodeps -ivh http://hao.vdpa.com/kernel_source/kernel-6.6.0-2027.x86_64.rpm http://hao.vdpa.com/kernel_source/kernel-headers-6.6.0-2027.x86_64.rpm
+      args:
+        creates: /path/to/kernel-package-installed-marker  # 可选：仅当文件不存在时执行
+      register: rpm_install_result
+      ignore_errors: yes  # 忽略错误，以便即使安装失败也可以尝试重启
+
+    - name: Reboot the VM if kernel was installed or updated
+      reboot:
+        msg: "Rebooting to activate new kernel"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: whoami  # 用于测试远程主机是否响应的命令
+      when: rpm_install_result.changed
+
+    # 可选：等待VM重新启动后继续执行其他任务
+    - name: Wait for VM to come back after reboot
+      wait_for_connection:
+        timeout: 600
+      when: rpm_install_result.changed
+
+      
+# Create the L2 VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+    - name: Destroy the guest L2 VM (in case name colision)
+      virt:
+        name: L2
+        state: destroyed
+      ignore_errors: true
+    
+    - name: Undefine guest L2 vm (in case name colision)
+      virt:
+        command: undefine
+        name: L2
+      ignore_errors: true
+
+    - name: Define the L2 VM
+      virt:
+        command: define
+        name: L2
+        xml: "{{ lookup('template', 'nested-vdpa-net_guest_L2_dst.xml.j2') }}"
+        autostart: no
+
+    - name: add /dev/vhost-vdpa0 device
+      command: ./insmod.sh
+#      command: ./insmod_origin.sh
+      args:  
+        chdir: /mnt/nfs/driver/
+      ignore_errors: true
+
+# no need to start VM on L1-dst, because virsh can migrate
+#    - name: Start the L2 VM
+#      virt:
+#        name: L2
+#        state: running
+# virsh run as system permission
+#        uri: qemu:///system
+#      register: l2_vm_start_result
+#      become: yes
+
+#    - name: Get the IP address of the virtual machine L2
+#      shell: virsh domifaddr L2
+#      register: l2_vm_ip_result
+#      ignore_errors: yes
+
+#    - name: Display the IP address of the virtual machine L2
+#      debug:
+#        var: l2_vm_ip_result
+#      when: l2_vm_ip_result.rc == 0
+
+    - debug: 
+        msg: >
+          "Now the Guest VM is running. To go inside the VM type
+          virsh console L2"
+
+

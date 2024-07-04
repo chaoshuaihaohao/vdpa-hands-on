@@ -1,0 +1,95 @@
+---  
+- name: build www httpd directory tree
+  hosts: localhost  
+  become: yes  
+  become_method: sudo  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+
+  tasks:  
+    - name: install dependencies
+      yum:
+        name:
+          - openssl-devel
+        state: installed
+
+
+#    - name: copy and rename local dpdk
+#      copy:
+#        src: /home/hao/www/github/HADOS_dpdk
+#        dest: /home/hao/www/github/dpdk-21.11
+#        remote_src: no  # 设置为no，因为我们是从本地拷贝到远程
+#        owner: root  # 设置目标目录的拥有者为vdpa
+#        group: root  # 设置目标目录的组为vdpa
+#        mode: '0755'  # 设置目标目录的权限为755
+#       # directory_mode: 'yes'  # 确保目录的权限也被设置
+
+    - name: Archive HADOS_dpdk directory
+      ansible.builtin.archive:
+        path: /home/hao/www/github/dpdk-21.11
+        dest: /home/hao/www/archive/dpdk.tar.gz
+        format: gz
+
+#        - name: Copy directory
+#      ansible.builtin.copy:
+#        src: /home/hao/www/github/HADOS_dpdk/
+#        dest: /home/vdpa/github/dpdk/
+#        remote_src: no  # 设置为no，因为我们是从本地拷贝到远程
+#        owner: root  # 设置目标目录的拥有者为vdpa
+#        group: root  # 设置目标目录的组为vdpa
+#        mode: '0755'  # 设置目标目录的权限为755
+       # directory_mode: 'yes'  # 确保目录的权限也被设置
+
+
+    - name: Download http://hao.vdpa.com/archive/dpdk.tar.gz to /root/rpmbuild/SOURCES/
+      get_url:  
+        url: http://hao.vdpa.com/archive/dpdk.tar.gz
+        dest: /root/rpmbuild/SOURCES/dpdk-21.11.tar.gz
+        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+        timeout: 300  
+        force: yes  # Force download even if file already exists
+
+    - name: Ensure "{{ build_dir }}/spec" directory exists
+      file:  
+        path: "{{ build_dir }}/spec"
+        state: directory  
+        mode: '0755'  
+  
+    - name: Download http://hao.vdpa.com/spec/dpdk-vdpa.spec to {{ build_dir }}/spec
+      get_url:  
+        url: http://hao.vdpa.com/spec/dpdk-vdpa.spec
+        dest: "{{ build_dir }}/spec/dpdk-vdpa.spec"
+        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+        timeout: 300  
+        force: no  # Force download even if file already exists      
+
+    - name: Build dpdk RPM
+      command: rpmbuild -ba dpdk-vdpa.spec
+      args:  
+        chdir: /home/vdpa/spec/
+
+
+
+    - name: Ensure "{{ build_dir }}/rpm" directory exists
+      file:  
+        path: "{{ build_dir }}/rpm"
+        state: directory  
+        mode: '0755'  
+
+    - name: Copy RPM packets
+      command: cp /root/rpmbuild/RPMS/x86_64/dpdk-21.11-1.el9.x86_64.rpm /home/hao/www/rpm/
+
+
+    - name: Install dpdk rpm on remote_host
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+      delegate_to: 10.2.20.56  # 使用虚拟机的IP地址作为目标主机
+
+    - name: Install dpdk http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm rpm on l1_src
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+      delegate_to: 192.168.122.56  # 使用虚拟机的IP地址作为目标主机
+
+    - name: Install dpdk http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm rpm on l1_dst
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+      delegate_to: 192.168.122.72  # 使用虚拟机的IP地址作为目标主机

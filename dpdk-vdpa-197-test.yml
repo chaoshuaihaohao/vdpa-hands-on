@@ -1,0 +1,266 @@
+# Playbook to set up a basic vhost-user development environment
+#
+#
+- name: dpdk-vdpa Setup
+  hosts: yusur_197
+  become: yes
+  vars_files:
+    - vars/dpdk-vdpa_settings.yml
+  tasks:
+  - name: install dependencies
+    apt:
+      update_cache: yes
+  - name: install dependencies
+    apt:
+      name:
+        - ninja-build
+        - meson
+        - libvirt-clients
+        - libvirt-daemon
+        - virt-manager
+        - sshpass
+        - sshfs
+        - tmux
+        - python3-lxml
+        - libguestfs-tools
+        - libsnappy-dev
+        - libjpeg-dev
+        - make
+        - gcc
+        - vim
+        - git
+        - libpixman-1-dev
+        - libevent-dev
+        - zlib1g-dev
+        - libncurses-dev
+        - flex
+        - binutils-dev
+        - libelf-dev
+        - libssl-dev
+        - debhelper
+        - python3-pyelftools
+        - python3-pkgconfig
+      state: present
+
+
+  - name: 在/etc/hosts末尾添加一行 DNS 解析
+    lineinfile:
+      path: /etc/hosts
+      line: "10.2.20.56 hao.vdpa.com"
+      insertafter: EOF  # 在文件末尾插入
+
+
+#  - name: install  my dpdk rpm(with yusur vdpa driver)
+#    command: rpm -ivh --force http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+
+#  - name: Install qemu rpm on l1_src
+#    command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+
+#  - name: install  my dpdk rpm(with yusur vdpa driver)
+#    command: rpm -ivh --force http://hao.vdpa.com/rpm/dpdk-21.11-1.el9.x86_64.rpm
+#    ignore_errors: true
+
+  - name: Check proper processor flags
+    shell: >
+      awk '/^flags/ && /ssse3/ && /pdpe1gb/ {r=1} END {exit !r}' /proc/cpuinfo || {
+        print 'Processor does not have all the flags sss3 and pdpe1gb. Can'\''t continue.';
+        exit 1;
+      }
+
+# In order to run libvirt commands, we need to add the user to the
+# libvirt group
+  - name: Add user to libvirt group
+    user:
+      groups:
+        - libvirt
+      name: "{{ ansible_facts['user_id'] }}"
+      append: yes
+    become: yes
+
+# libvirtd if something changed
+  - name: Start libvirtd
+    service:
+      name: libvirtd
+      state: started
+    become: yes
+
+  - name: Ensure {{ build_dir }}/qcow2 exists  
+    file:  
+      path: "{{ build_dir }}/qcow2"
+      state: directory  
+      mode: '0755'  
+
+# Download base image if it does not exist
+  - name: Check if the base image file exists
+    stat:
+      path: "{{ base_image_file }}"
+    register: base_image
+
+#  - name: Download base image
+#    get_url:
+#      url: '{{ remote_base_file }}'
+#      dest: "{{ base_image_file }}"
+#      mode: '0640'
+#    when:
+#      - base_image.stat.exists == False
+
+
+# Create and start the default network
+  - name: Destroy previous default network
+    virt_net:
+      state: absent
+      name: virtio-default
+
+  - name: Define default network
+    virt_net:
+      command: define
+      name: virtio-default
+      xml: "{{ lookup('template', 'virtio-default-network.xml.j2') }}"
+
+  - name: Start default network
+    virt_net:
+      state: active
+      name: virtio-default
+
+# Create the VM
+# Before actually creating it, let's ensure there is no VM with the same name
+# is already configured
+  - name: Destroy the guest VM (in case name colision)
+    virt:
+      name: "{{ guest_name }}"
+      state: destroyed
+    ignore_errors: true
+
+# Create our VM image using the base image as backing store
+  - name: Create image
+    command: >
+        qemu-img create -f qcow2 -F qcow2 -b 
+         {{ base_image_name }}
+         {{ guest_name }}.qcow2
+         20G
+    args:  
+      chdir: "{{ build_dir }}/qcow2/"
+
+  - name: Prepare image
+    command: >
+       virt-sysprep --run-command 'sudo sed -i -e "s|mirrorlist=|#mirrorlist=|g" /etc/yum.repos.d/CentOS-*' 
+       --run-command 'sudo sed -i -e "s|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g" /etc/yum.repos.d/CentOS-*'
+       -a {{ vm_image_file }}
+    environment:
+      LIBVIRT_DEFAULT_URI: qemu:///system
+    ignore_errors: true
+
+  - name: Prepare image
+    command: >
+       virt-sysprep --root-password password:{{ guest_root_password }}
+         --uninstall cloud-init
+         --network --install "net-tools,pciutils,tmux"
+         --selinux-relabel
+         -a {{ vm_image_file }}
+         --hostname {{ guest_name }}
+    environment:
+      LIBVIRT_DEFAULT_URI: qemu:///system
+    ignore_errors: true
+
+  - name: Undefine guest vm (in case name colision)
+    virt:
+      command: undefine
+      name: "{{ guest_name }}"
+    ignore_errors: true
+
+  - name: Define the VM
+    virt:
+      command: define
+      name: "{{ guest_name}}"
+      xml: "{{ lookup('template', 'dpdk-vdpa_guest.xml.j2') }}"
+      autostart: no
+
+  - name: insert vfio module
+    modprobe:
+      name: vfio
+      state: present
+      params: "enable_unsafe_noiommu_mode=1"
+
+  - name: insert vfio-pci module
+    modprobe:
+      name: vfio-pci
+      state: present
+
+######################################################################################
+# run the dpdk-vdpa
+# ####################################################################################
+  - name: Generate dpdk-vdpa command
+    template:
+      dest: /tmp/dpdk-vdpa.sh
+      src: dpdk_vdpa-app.j2
+      force: yes
+
+  - name: Kill existing instances of testpmd
+    shell: pgrep dpdk-vdpa | xargs --no-run-if-empty kill
+    ignore_errors: true
+    become: yes
+
+  - name: Kill existing tmux sessions
+    shell: tmux kill-session -t dpdk-vdpa-session
+    ignore_errors: true
+    become: yes
+
+  - name: rm previous socket files
+    file:
+      path: "{{ item.path }}"
+      state: absent
+    with_items: " {{ vhost_ifaces }}"
+    become: yes
+
+  - name: Start dpdk-vdpa in the host
+    shell: sh /tmp/dpdk-vdpa.sh
+    become: yes
+
+#    - name: Wait for dpdk-vdpa to initialize unix sockets
+#      wait_for:
+#        path: "{{ item.path }}"
+#        timeout: 5
+#      with_items: " {{ vhost_ifaces }}"
+
+  - name: Change file ownership, group and permissions
+    file:
+      path: "{{ item.path }}"
+      owner: qemu
+      group: qemu
+      mode: '0644'
+    with_items: " {{ vhost_ifaces }}"
+    ignore_errors: true
+  
+  - name: insert vfio module
+    modprobe:
+      name: vfio
+      state: present
+      params: "enable_unsafe_noiommu_mode=1"
+
+#  - name: Change the svirt_t domain to permissive
+#    selinux_permissive:
+#      name: svirt_t
+#      permissive: true
+
+  - name: Start the VM
+    virt:
+      name: "{{ guest_name}}"
+      state: running
+
+  - name: Wait for port 22 to become available on guest
+    wait_for:
+      host: "{{ guest_ip }}"
+      port: 22
+      delay: 5
+
+
+  - debug:
+      msg:
+      - "Now the Guest VM is running. To go inside the VM type:
+           $ virsh console {{ guest_name }}"
+      - "A Tmux session has been created in the host. Attach to it by running:
+           $ sudo tmux attach-session -t testpmd-session"
+      - "A Tmux session has been created in the guest. Attach to it by running:
+           $ ssh root@{{ guest_ip }} -t -- tmux attach -t guest-testpmd-session"
+
+

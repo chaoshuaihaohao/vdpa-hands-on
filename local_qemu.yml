@@ -1,0 +1,67 @@
+---  
+- name: build www httpd directory tree
+  hosts: localhost  
+  become: yes  
+  become_method: sudo  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+
+  tasks:  
+    - name: Ensure {{ qemu_path }} directory exists
+      file:  
+        path: "{{ qemu_path }}"
+        state: directory  
+        mode: '0755'  
+
+    - name: Ensure /root/rpmbuild/SOURCES directory exists
+      file:  
+        path: /root/rpmbuild/SOURCES
+        state: directory  
+        mode: '0755'  
+
+    # You can modify the qemu code, than tar it.
+    - name: tar compress qemu source directory to /root/rpmbuild/SOURCES/qemu.tar.xz
+      command: tar czf /root/rpmbuild/SOURCES/qemu.tar.xz -C {{ github_path }}   qemu
+
+#    - name: Download http://hao.vdpa.com/qemu_source/qemu.tar.xz to /root/rpmbuild/SOURCES/
+#      get_url:  
+#        url: http://hao.vdpa.com/qemu_source/qemu.tar.xz
+#        dest: /root/rpmbuild/SOURCES/qemu.tar.xz
+#        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+#        timeout: 300  
+#        force: yes  # Force download even if file already exists
+
+  
+#    - name: Download qemu.spec to {{ build_dir }}/qemu_source
+#      get_url:  
+#        url: http://hao.vdpa.com/qemu_source/qemu.spec
+#        dest: "{{ build_dir }}/qemu_source/qemu.spec"
+#        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+#        timeout: 300  
+#        force: no  # Force download even if file already exists      
+
+    - name: Build QEMU RPM
+      command: rpmbuild -ba /home/hao/www/spec/qemu.spec  
+
+    - name: Copy QEMU RPM to http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+      command:   cp /root/rpmbuild/RPMS/x86_64/hadep_qemu-4.3.0-1.el9.x86_64.rpm /home/hao/www/rpm/
+
+    - name: Cleanup downloaded archive (optional)
+      file:
+        path: /root/rpmbuild/RPMS
+        state: absent
+
+
+    - name: Install qemu rpm on remote_host
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+      delegate_to: 10.2.20.56  # 使用虚拟机的IP地址作为目标主机
+
+    - name: Install qemu rpm on l1_src
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+      delegate_to: 192.168.122.56  # 使用虚拟机的IP地址作为目标主机
+
+    - name: Install qemu rpm on l1_dst
+      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+      delegate_to: 192.168.122.72  # 使用虚拟机的IP地址作为目标主机

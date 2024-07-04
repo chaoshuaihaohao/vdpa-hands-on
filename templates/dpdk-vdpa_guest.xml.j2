@@ -6,15 +6,18 @@ or other application using the libvirt API.
 -->
 
 <domain type='kvm'>
-  <name>{{ guest_l2_name }}</name>
-  <uuid>53f91a49-e410-4815-be9b-0d7c463c526a</uuid>
+  <name>{{ guest_name }}</name>
+  <uuid>53f91a49-e410-4815-be9d-0d7c463c526a</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://centos.org/centos-stream/9"/>
     </libosinfo:libosinfo>
   </metadata>
-  <memory locked="yes" unit='KiB'>2097152</memory>
+  <memory unit='KiB'>2097152</memory>
   <currentMemory unit='KiB'>2097152</currentMemory>
+  <memoryBacking>
+    <hugepages/>
+  </memoryBacking>
   <vcpu placement='static'>2</vcpu>
   <os>
     <type arch='x86_64' machine='q35'>hvm</type>
@@ -24,7 +27,15 @@ or other application using the libvirt API.
     <acpi/>
     <apic/>
   </features>
-  <cpu mode='host-passthrough' check='none' migratable='on'/>
+  <cpu mode='host-model' check='partial'>
+    <feature policy='disable' name='waitpkg'/>
+    <numa>
+      <cell id='0' cpus='0-1' memory='2097152' unit='KiB' memAccess='shared'/>
+    </numa>
+  </cpu>
+<memoryBacking>
+        <hugepages/>
+</memoryBacking>
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
     <timer name='pit' tickpolicy='delay'/>
@@ -41,10 +52,10 @@ or other application using the libvirt API.
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='{{ guest_l2_image_file }}'/>
+      <source file='{{ vm_image_file }}'/>
       <target dev='sda' bus='sata'/>
       <address type='drive' controller='0' bus='0' target='0' unit='0'/>
-    </disk>    
+    </disk>
     <controller type='usb' index='0' model='qemu-xhci' ports='15'>
       <address type='pci' domain='0x0000' bus='0x02' slot='0x00' function='0x0'/>
     </controller>
@@ -122,11 +133,22 @@ or other application using the libvirt API.
     <controller type='sata' index='0'>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x1f' function='0x2'/>
     </controller>
-<!--    
-    <interface type='vdpa'>
-	    <source dev='/dev/vhost-vdpa-0'/>
+    <interface type='network'>
+      <mac address='52:54:00:30:5b:10'/>
+      <source network='default'/>
+      <model type='e1000'/>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
     </interface>
--->    
+    {% for iface in vhost_ifaces %}
+    <interface type='vhostuser'>
+      <mac address='{{ iface.mac }}'/>
+      <source type='unix' path='{{ iface.path }}' mode='server'/>
+      <model type='virtio'/>
+      <driver name='vhost' rx_queue_size='{{ iface.rx_queue_size }}' />
+      <address type='pci' domain='0x{{ iface.pci_addr.domain }}' bus='0x{{ iface.pci_addr.bus}}' slot='0x{{ iface.pci_addr.slot }}' function='{{ iface.pci_addr.function }}' />
+    </interface>
+    {% endfor %}
+
     <serial type='pty'>
       <target type='isa-serial' port='0'>
         <model name='isa-serial'/>
@@ -138,19 +160,13 @@ or other application using the libvirt API.
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
     <audio id='1' type='none'/>
+<!--
     <watchdog model='itco' action='reset'/>
-    <memballoon model='none'>
-      <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
-    </memballoon>
+-->
+    <memballoon model='none'/>
   </devices>
   <qemu:commandline xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
-    <qemu:arg value='-monitor'/>
-    <qemu:arg value='tcp:localhost:5555,server,nowait'/>
-    <qemu:arg value='-netdev'/>
-    <qemu:arg
-    value='type=vhost-vdpa,vhostdev=/dev/vhost-vdpa-0,id=vhost-vdpa0,x-svq=on'/>
-    <qemu:arg value='-device'/>
-    <qemu:arg
-    value='virtio-net-pci,netdev=vhost-vdpa0,bus=pcie.0,addr=0x3,guest_announce=off,queue_reset=off,indirect_desc=off'/>
+     <qemu:arg value='-monitor'/>
+     <qemu:arg value='tcp:localhost:5555,server,nowait'/>
   </qemu:commandline>
 </domain>

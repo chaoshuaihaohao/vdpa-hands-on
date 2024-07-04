@@ -1,0 +1,27 @@
+---  
+- name: Mount remote directory via SSHFS
+  hosts: kvm_host
+  vars:  
+    remote_user: hao
+    remote_host: 10.2.20.56
+    remote_path: /home/hao/nfs
+    ssh_key_path: /home/hao/.ssh/id_rsa
+  become: yes
+  tasks:
+    - name: Install sshfs (if not already installed)
+      yum:
+        name: sshfs
+        state: present
+        update_cache: yes
+      when: ansible_os_family == 'Centos'
+
+    - name: Create local mount point if it does not exist
+      file:
+        path: /mnt/nfs
+        state: directory
+        mode: '0755'
+
+    - name: Mount remote directory using sshfs
+      #shell: sshfs {{ remote_user }}@{{ remote_host }}:{{ remote_path }} /mnt/nfs -o rw,allow_other,IdentityFile={{ ssh_key_path }}
+      shell: mount -t fuse.sshfs hao@10.2.20.56:/home/hao/nfs /mnt/nfs -o rw,allow_other
+      become: yes

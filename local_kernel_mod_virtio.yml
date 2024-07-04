@@ -1,0 +1,74 @@
+---  
+- name: build www httpd directory tree
+  hosts: localhost  
+#  become: yes  
+  become_method: sudo  
+  vars_files:
+    - vars/rpm_linux_build.yml
+
+  tasks:  
+    - name: Ensure "{{ kernel_src_path }}" directory exists
+      file:  
+        path: "{{ kernel_src_path }}"
+        state: directory  
+        mode: '0755'  
+
+    - name: Ensure linux config file exists
+      file:  
+        path: /home/hao/www/linux-config
+        state: file
+        mode: '0644'  
+        
+    - name: checkout linux branch
+      command: git checkout {{ kernel_branch }}
+      args:  
+        chdir: "{{ kernel_src_path }}"
+
+    - name: Copy linux config to linux source directory
+      copy:
+        src: /home/hao/www/linux-config
+        dest: "{{ kernel_src_path }}/.config"
+        remote_src: no  # 设置为no，因为我们是从本地拷贝到远程
+#        owner: root  # 设置目标目录的拥有者为vdpa
+#        group: root  # 设置目标目录的组为vdpa
+        mode: '0644'  # 设置目标目录的权限为755
+       # directory_mode: 'yes'  # 确保目录的权限也被设置
+
+    - name: Set linux rpm version
+      command: echo {{ kernel_version }} > .version
+      args:  
+        chdir: "{{ kernel_src_path }}"
+
+    - name: build linux rpm
+      command: make rpm-pkg -j128
+      args:  
+        chdir: "{{ kernel_src_path }}"
+
+
+#    - name: Copy linux config to linux source directory
+#      copy:
+#        src: {{ kernel_src_path }}/rpmbuild/RPMS/x86_64/kernel-6.6.0-{{ kernel_version }}.x86_64.rpm
+#        src: {{ kernel_src_path }}/rpmbuild/RPMS/x86_64/kernel-headers-6.6.0-{{ kernel_version }}.x86_64.rpm
+#        src: {{ kernel_src_path }}/rpmbuild/SRPMS/kernel-6.6.0-{{ kernel_version }}.src.rpm
+#        src: {{ kernel_src_path }}/rpmbuild/SOURCES/linux.tar.gz
+#        dest: {{ kernel_src_path }}/.config
+#        remote_src: no  # 设置为no，因为我们是从本地拷贝到远程
+#        owner: root  # 设置目标目录的拥有者为vdpa
+#        group: root  # 设置目标目录的组为vdpa
+#        mode: '0644'  # 设置目标目录的权限为755
+       # directory_mode: 'yes'  # 确保目录的权限也被设置
+
+
+
+       #
+#    - name: Install qemu rpm on remote_host
+#      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+#      delegate_to: 10.2.20.56  # 使用虚拟机的IP地址作为目标主机
+
+#    - name: Install qemu rpm on l1_src
+#      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+#      delegate_to: 192.168.122.56  # 使用虚拟机的IP地址作为目标主机
+
+#    - name: Install qemu rpm on l1_dst
+#      command: rpm -ivh --force --nodeps http://hao.vdpa.com/rpm/hadep_qemu-4.3.0-1.el9.x86_64.rpm
+#      delegate_to: 192.168.122.72  # 使用虚拟机的IP地址作为目标主机

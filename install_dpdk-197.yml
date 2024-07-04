@@ -1,0 +1,46 @@
+---  
+- name: build www httpd directory tree
+  hosts: yusur_197
+  become: yes  
+  become_method: sudo  
+  vars_files:
+    - vars/nest-vdpa-net-kernel_settings.yml
+
+  tasks:  
+    - name: Ensure "/home/hao/www/github/dpdk" directory exists
+      file:  
+        path: "/home/hao/www/github/dpdk"
+        state: directory  
+        mode: '0755'  
+      delegate_to: localhost
+
+    - name: Ensure /root/rpmbuild/SOURCES directory exists
+      file:  
+        path: /root/rpmbuild/SOURCES
+        state: directory  
+        mode: '0755'  
+      delegate_to: localhost
+
+    - name: Ensure "{{ build_dir }}/archive/" directory exists
+      file:  
+        path: "{{ build_dir }}/archive/"
+        state: directory  
+        mode: '0755'  
+
+#########################################################################################
+# Install Dpdk
+#########################################################################################
+    - name: tar compress dpdk source directory to /root/rpmbuild/SOURCES/dpdk.tar.xz
+      command: tar czf /home/hao/www/archive/dpdk.tar.xz -C /home/hao/www/github   dpdk-21.11
+      delegate_to: localhost
+
+    - name: Download http://hao.vdpa.com/archive/dpdk.tar.xz to /home/vdpa/archive/
+      get_url:  
+        url: http://hao.vdpa.com/archive/dpdk.tar.xz
+        dest: "{{ build_dir }}/archive/dpdk.tar.xz"
+        mode: '0644'
+#        checksum: 'sha256:YOUR_CHECKSUM_HERE'  # Replace with the actual checksum    
+#        timeout: 300  
+        force: yes  # Force download even if file already exists
+
+  

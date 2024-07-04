@@ -138,6 +138,6 @@ or other application using the libvirt API.
         <qemu:arg value='tap,id=mytap0,script=no,downscript=no,vhost=off'/>
         <qemu:arg value='-device'/>
         <qemu:arg value='virtio-net-pci,mac={{ guest_l1_src_mac
-	}},netdev=mytap0,disable-legacy=on,disable-modern=off,iommu_platform=on,ctrl_vq=off,ctrl_mac_addr=off,ctrl_rx=off,ctrl_vlan=off,ctrl_rx_extra=off,guest_announce=off,ctrl_guest_offloads=off,indirect_desc=off,queue_reset=off,vdpa=on'/>
+	}},netdev=mytap0,disable-legacy=on,disable-modern=off,iommu_platform=on,guest_announce=off,queue_reset=off,indirect_desc=off,vdpa=on'/>
   </qemu:commandline>
 </domain>

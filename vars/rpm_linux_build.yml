@@ -1,0 +1,7 @@
+#kernel_src_path: /home/chenhao/virtio/nfs/github/linux
+#kernel_config_path: /home/chenhao/virtio/nfs/github/linux/.config
+kernel_src_path: /home/hao/www/github/linux
+kernel_config_path: /home/hao/www/github/linux/.config
+kernel_version: 1
+kernel_branch: v6.6
+

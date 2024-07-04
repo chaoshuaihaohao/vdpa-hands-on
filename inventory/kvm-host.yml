@@ -1,5 +1,12 @@
 [kvm_host]
-10.2.20.56 ansible_ssh_user=hao ansible_ssh_pass=1 ansible_python_interpreter=/usr/bin/python3
+#192.168.2.71 ansible_host=chenhao ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+#192.168.2.71  ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+#192.168.2.71 ansible_ssh_user=root ansible_ssh_pass=1234qwer@YS ansible_python_interpreter=/usr/bin/python3
+#192.168.2.71 ansible_ssh_user=chenhao ansible_ssh_pass=1 ansible_python_interpreter=/usr/bin/python3 
+#192.168.2.190 ansible_ssh_user=chenhao ansible_ssh_pass=1 ansible_python_interpreter=/usr/bin/python3 
+#192.168.2.190 ansible_ssh_user=root ansible_ssh_pass=1234qwer@YS ansible_python_interpreter=/usr/bin/python3 
+
+10.2.20.56 ansible_ssh_user=hao ansible_ssh_pass=1 ansible_python_interpreter=/usr/bin/python3 
 
 # ansible_ssh_extra_args='-o StrictHostKeyChecking=no'
 [l1_src]
@@ -7,4 +14,10 @@
 
 [l1_dst]
 192.168.122.72 ansible_ssh_user=root ansible_ssh_pass=1
+
+
+[yusur_197]
+#192.168.28.197 ansible_ssh_user=root ansible_ssh_pass=8826
+#192.168.28.35  ansible_ssh_user=c ansible_ssh_pass=1234qwer@YS
+192.168.28.35  ansible_ssh_user=virtio ansible_ssh_pass=virtio
 
